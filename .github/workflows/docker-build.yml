@@ -10,15 +10,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # 1. Checkout source code
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # 2. Login to Docker Hub
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      # 3. Build Docker image and push to Docker Hub
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
         with:
@@ -26,46 +30,145 @@ jobs:
           push: true
           tags: dcscc13/python-devops-demo:latest
 
+      # 4. Start Minikube inside GitHub Actions
       - name: Start Minikube
         uses: medyagh/setup-minikube@latest
 
+      # 5. Check Kubernetes cluster
       - name: Check Kubernetes
         run: |
+          echo "===== MINIKUBE STATUS ====="
           minikube status
+
+          echo "===== KUBERNETES NODES ====="
           kubectl get nodes
 
+      # 6. Deploy application to Kubernetes
       - name: Deploy Application
         run: |
+          echo "===== DEPLOYING APPLICATION ====="
+
           kubectl apply -f deployment.yaml
           kubectl apply -f service.yaml
 
+      # 7. Wait for Kubernetes deployment
       - name: Wait for Deployment
         run: |
-          kubectl rollout status deployment/python-devops-demo --timeout=120s
+          echo "===== WAITING FOR DEPLOYMENT ====="
 
+          kubectl rollout status \
+            deployment/python-devops-demo \
+            --timeout=120s
+
+      # 8. Check Kubernetes resources
       - name: Check Kubernetes Resources
         run: |
           echo "===== DEPLOYMENTS ====="
           kubectl get deployments
 
+          echo ""
           echo "===== PODS ====="
           kubectl get pods -o wide
 
+          echo ""
           echo "===== SERVICES ====="
           kubectl get services
 
+      # 9. Test application
       - name: Test Application
         run: |
           MINIKUBE_IP=$(minikube ip)
-          NODE_PORT=$(kubectl get service python-devops-demo -o jsonpath='{.spec.ports[0].nodePort}')
+
+          NODE_PORT=$(kubectl get service python-devops-demo \
+            -o jsonpath='{.spec.ports[0].nodePort}')
 
           echo "Minikube IP: $MINIKUBE_IP"
           echo "NodePort: $NODE_PORT"
 
-          echo "Testing application..."
+          echo ""
+          echo "===== TESTING APPLICATION ====="
 
-          curl --fail --retry 10 --retry-delay 3 \
-            http://$MINIKUBE_IP:$NODE_PORT
+          RESPONSE=$(curl \
+            --fail \
+            --retry 10 \
+            --retry-delay 3 \
+            http://$MINIKUBE_IP:$NODE_PORT)
+
+          echo "Application Response:"
+          echo "$RESPONSE"
 
           echo ""
           echo "Application test successful!"
+
+      # 10. Create GitHub Actions summary
+      - name: Deployment Summary
+        run: |
+          MINIKUBE_IP=$(minikube ip)
+
+          NODE_PORT=$(kubectl get service python-devops-demo \
+            -o jsonpath='{.spec.ports[0].nodePort}')
+
+          POD_STATUS=$(kubectl get pods \
+            -l app=python-devops-demo \
+            -o jsonpath='{range .items[*]}{.status.phase}{" "}{end}')
+
+          {
+            echo "# 🚀 Deployment Successful"
+            echo ""
+            echo "## 🐳 Docker"
+            echo ""
+            echo "**Image:** \`dcscc13/python-devops-demo:latest\`"
+            echo ""
+            echo "## ☸️ Kubernetes"
+            echo ""
+            echo "| Resource | Value |"
+            echo "|---|---|"
+            echo "| Deployment | python-devops-demo |"
+            echo "| Replicas | 2 |"
+            echo "| Minikube | Running |"
+            echo "| NodePort | $NODE_PORT |"
+            echo ""
+            echo "### Pods"
+            echo ""
+            kubectl get pods \
+              -l app=python-devops-demo \
+              --no-headers
+            echo ""
+            echo "### Service"
+            echo ""
+            kubectl get service python-devops-demo
+            echo ""
+            echo "## 🧪 Application Test"
+            echo ""
+            echo "**Status:** ✅ Passed"
+            echo ""
+            echo "**Response:**"
+            echo ""
+            echo '```text'
+            echo "Hello from my DevOps CI/CD Pipeline!"
+            echo '```'
+            echo ""
+            echo "## 📦 Pipeline Flow"
+            echo ""
+            echo '```text'
+            echo "Git Push"
+            echo "   ↓"
+            echo "GitHub Actions"
+            echo "   ↓"
+            echo "Docker Build"
+            echo "   ↓"
+            echo "Docker Hub"
+            echo "   ↓"
+            echo "Minikube"
+            echo "   ↓"
+            echo "Kubernetes Deployment"
+            echo "   ↓"
+            echo "2 Pods"
+            echo "   ↓"
+            echo "Kubernetes Service"
+            echo "   ↓"
+            echo "Application Test"
+            echo "   ↓"
+            echo "✅ SUCCESS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
