@@ -10,18 +10,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Get the code from GitHub
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # 2. Log in to Docker Hub
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      # 3. Build the Docker image and push it to Docker Hub
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: nanithayadav-02/python-devops-demo:latest
+          tags: dcscc13/python-devops-demo:latest
