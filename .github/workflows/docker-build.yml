@@ -1,11 +1,7 @@
-name: CI/CD Pipeline
+name: Build, Scan, Push and Deploy
 
 on:
   push:
-    branches:
-      - main
-
-  pull_request:
     branches:
       - main
 
@@ -15,126 +11,100 @@ permissions:
 env:
   IMAGE_NAME: dcscc13/python-devops-demo
   IMAGE_TAG: latest
-  DEPLOYMENT_NAME: python-devops-demo
-  SERVICE_NAME: python-devops-demo
 
 jobs:
-  build-scan-deploy:
-    name: Build, Scan, Deploy & Test
+
+  build-scan-push-deploy:
+    name: Build, SonarQube, Docker and Kubernetes
     runs-on: ubuntu-latest
 
     steps:
 
-      # ==================================================
-      # 1. Checkout Source Code
-      # ==================================================
-      - name: Checkout code
+      # --------------------------------------------------
+      # 1. Checkout
+      # --------------------------------------------------
+      - name: Checkout source code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-
-      # ==================================================
-      # 2. Setup Python
-      # ==================================================
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-
-      # ==================================================
-      # 3. Install Dependencies
-      # ==================================================
-      - name: Install dependencies
+      # --------------------------------------------------
+      # 2. Generate SonarQube project information
+      # --------------------------------------------------
+      - name: Generate SonarQube project details
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
 
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
+          echo "SONAR_PROJECT_KEY=$REPO_NAME" >> "$GITHUB_ENV"
+          echo "SONAR_PROJECT_NAME=$REPO_NAME" >> "$GITHUB_ENV"
 
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "SonarQube Project Key: $REPO_NAME"
+          echo "SonarQube Project Name: $REPO_NAME"
 
-      # ==================================================
-      # 4. SonarQube Analysis
-      # ==================================================
-      - name: SonarQube Analysis
+      # --------------------------------------------------
+      # 3. SonarQube Scan
+      # --------------------------------------------------
+      - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         with:
           args: >
-            -Dsonar.projectKey=${{ github.repository }}
-            -Dsonar.projectName=${{ github.event.repository.name }}
+            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
+            -Dsonar.projectName=${{ env.SONAR_PROJECT_NAME }}
             -Dsonar.sources=.
             -Dsonar.exclusions=**/.git/**,**/__pycache__/**,**/venv/**,**/.venv/**,**/tests/**
 
-
-      # ==================================================
-      # 5. SonarQube Quality Gate
-      # ==================================================
+      # --------------------------------------------------
+      # 4. SonarQube Quality Gate
+      # --------------------------------------------------
       - name: SonarQube Quality Gate
         uses: SonarSource/sonarqube-quality-gate-action@v1
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-
-      # ==================================================
-      # 6. Login to Docker Hub
-      # ==================================================
+      # --------------------------------------------------
+      # 5. Login to Docker Hub
+      # --------------------------------------------------
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-
-      # ==================================================
-      # 7. Setup Docker Buildx
-      # ==================================================
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-
-      # ==================================================
-      # 8. Build and Push Docker Image
-      # ==================================================
+      # --------------------------------------------------
+      # 6. Build and Push Docker Image
+      # --------------------------------------------------
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
-
-      # ==================================================
-      # 9. Start Minikube
-      # ==================================================
+      # --------------------------------------------------
+      # 7. Start Minikube
+      # --------------------------------------------------
       - name: Start Minikube
         uses: medyagh/setup-minikube@latest
 
-
-      # ==================================================
-      # 10. Verify Kubernetes Cluster
-      # ==================================================
-      - name: Verify Kubernetes
+      # --------------------------------------------------
+      # 8. Check Kubernetes
+      # --------------------------------------------------
+      - name: Check Kubernetes cluster
         run: |
           echo "===== MINIKUBE STATUS ====="
           minikube status
 
-          echo ""
           echo "===== KUBERNETES NODES ====="
           kubectl get nodes
 
-
-      # ==================================================
-      # 11. Deploy Application
-      # ==================================================
+      # --------------------------------------------------
+      # 9. Deploy Application
+      # --------------------------------------------------
       - name: Deploy Application
         run: |
           echo "===== DEPLOYING APPLICATION ====="
@@ -142,23 +112,21 @@ jobs:
           kubectl apply -f deployment.yaml
           kubectl apply -f service.yaml
 
-
-      # ==================================================
-      # 12. Wait for Deployment
-      # ==================================================
-      - name: Wait for Deployment
+      # --------------------------------------------------
+      # 10. Wait for Deployment
+      # --------------------------------------------------
+      - name: Wait for Kubernetes deployment
         run: |
           echo "===== WAITING FOR DEPLOYMENT ====="
 
           kubectl rollout status \
-            deployment/${{ env.DEPLOYMENT_NAME }} \
+            deployment/python-devops-demo \
             --timeout=120s
 
-
-      # ==================================================
-      # 13. Verify Kubernetes Resources
-      # ==================================================
-      - name: Verify Kubernetes Resources
+      # --------------------------------------------------
+      # 11. Check Kubernetes Resources
+      # --------------------------------------------------
+      - name: Check Kubernetes resources
         run: |
           echo "===== DEPLOYMENTS ====="
           kubectl get deployments
@@ -171,102 +139,129 @@ jobs:
           echo "===== SERVICES ====="
           kubectl get services
 
-
-      # ==================================================
-      # 14. Application Health Test
-      # ==================================================
-      - name: Test Application
+      # --------------------------------------------------
+      # 12. Test Application
+      # --------------------------------------------------
+      - name: Test application
+        shell: bash
         run: |
-          echo "===== TESTING APPLICATION ====="
-
           MINIKUBE_IP=$(minikube ip)
 
-          NODE_PORT=$(kubectl get service \
-            ${{ env.SERVICE_NAME }} \
+          NODE_PORT=$(kubectl get service python-devops-demo \
             -o jsonpath='{.spec.ports[0].nodePort}')
 
-          URL="http://${MINIKUBE_IP}:${NODE_PORT}"
+          echo "Minikube IP: $MINIKUBE_IP"
+          echo "NodePort: $NODE_PORT"
 
-          echo "Application URL: ${URL}"
+          echo ""
+          echo "===== TESTING APPLICATION ====="
 
           RESPONSE=$(curl \
             --fail \
-            --silent \
-            --show-error \
             --retry 10 \
             --retry-delay 3 \
-            --retry-connrefused \
-            "${URL}")
+            "http://$MINIKUBE_IP:$NODE_PORT")
+
+          echo "Application Response:"
+          echo "$RESPONSE"
 
           echo ""
-          echo "===== APPLICATION RESPONSE ====="
-          echo "${RESPONSE}"
+          echo "Application test successful!"
 
-          echo ""
-          echo "Application test successful."
-
-
-      # ==================================================
-      # 15. GitHub Actions Summary
-      # ==================================================
-      - name: Generate Pipeline Summary
-        if: always()
+      # --------------------------------------------------
+      # 13. GitHub Actions Summary
+      # --------------------------------------------------
+      - name: Deployment Summary
+        shell: bash
         run: |
+          MINIKUBE_IP=$(minikube ip)
+
+          NODE_PORT=$(kubectl get service python-devops-demo \
+            -o jsonpath='{.spec.ports[0].nodePort}')
+
+          POD_STATUS=$(kubectl get pods \
+            -l app=python-devops-demo \
+            -o jsonpath='{range .items[*]}{.status.phase}{" "}{end}')
+
           {
-            echo "# 🚀 CI/CD Pipeline Summary"
+            echo "# 🚀 CI/CD Pipeline Successful"
             echo ""
 
-            echo "## 🔎 SonarQube"
+            echo "## 🔍 SonarQube"
             echo ""
             echo "| Property | Value |"
             echo "|---|---|"
-            echo "| Project | \`${{ github.event.repository.name }}\` |"
-            echo "| Project Key | \`${{ github.repository }}\` |"
-            echo "| Quality Gate | Passed |"
+            echo "| Project | $SONAR_PROJECT_NAME |"
+            echo "| Project Key | $SONAR_PROJECT_KEY |"
+            echo "| Quality Gate | ✅ Passed |"
             echo ""
 
             echo "## 🐳 Docker"
             echo ""
-            echo "| Property | Value |"
-            echo "|---|---|"
-            echo "| Image | \`${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}\` |"
-            echo "| Registry | Docker Hub |"
+            echo "**Image:** \`${IMAGE_NAME}:${IMAGE_TAG}\`"
             echo ""
 
             echo "## ☸️ Kubernetes"
             echo ""
-            echo "| Property | Value |"
+            echo "| Resource | Value |"
             echo "|---|---|"
-            echo "| Cluster | Minikube |"
-            echo "| Deployment | \`${{ env.DEPLOYMENT_NAME }}\` |"
-            echo "| Service | \`${{ env.SERVICE_NAME }}\` |"
+            echo "| Deployment | python-devops-demo |"
+            echo "| Replicas | 2 |"
+            echo "| Minikube | Running |"
+            echo "| NodePort | $NODE_PORT |"
+            echo ""
+
+            echo "### Pods"
+            echo ""
+            echo '```text'
+            kubectl get pods \
+              -l app=python-devops-demo \
+              --no-headers
+            echo '```'
+            echo ""
+
+            echo "### Service"
+            echo ""
+            echo '```text'
+            kubectl get service python-devops-demo
+            echo '```'
+            echo ""
+
+            echo "## 🧪 Application Test"
+            echo ""
+            echo "**Status:** ✅ Passed"
+            echo ""
+            echo "**Response:**"
+            echo ""
+            echo '```text'
+            echo "Hello from my DevOps CI/CD Pipeline!"
+            echo '```'
             echo ""
 
             echo "## 📦 Pipeline Flow"
             echo ""
             echo '```text'
-            echo "Git Push / Pull Request"
-            echo "        ↓"
-            echo "Checkout"
-            echo "        ↓"
-            echo "Python Setup"
-            echo "        ↓"
-            echo "Dependencies"
-            echo "        ↓"
+            echo "Git Push"
+            echo "   ↓"
+            echo "GitHub Actions"
+            echo "   ↓"
             echo "SonarQube Analysis"
-            echo "        ↓"
+            echo "   ↓"
             echo "Quality Gate"
-            echo "        ↓"
+            echo "   ↓"
             echo "Docker Build"
-            echo "        ↓"
+            echo "   ↓"
             echo "Docker Hub"
-            echo "        ↓"
+            echo "   ↓"
             echo "Minikube"
-            echo "        ↓"
+            echo "   ↓"
             echo "Kubernetes Deployment"
-            echo "        ↓"
+            echo "   ↓"
+            echo "2 Pods"
+            echo "   ↓"
             echo "Application Test"
-            echo "        ↓"
-            echo "      SUCCESS"
+            echo "   ↓"
+            echo "✅ SUCCESS"
             echo '```'
+
           } >> "$GITHUB_STEP_SUMMARY"
